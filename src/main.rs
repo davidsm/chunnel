@@ -6,7 +6,7 @@ use std::path::Path;
 use std::io;
 use std::io::{Read, Write};
 use std::cmp;
-use ssh2::{Session, Error, Channel};
+use ssh2::{Session, Error};
 use nix::sys::select::{select, FdSet};
 use nix::sys::time::TimeVal;
 use std::os::unix::io::AsRawFd;
@@ -24,21 +24,17 @@ fn eagain_error(sess: &Session) -> bool {
     }
 }
 
-
-fn handle_stream_read(session: &Session, stream: &mut TcpStream,
-                      channel: &mut Channel, mut buf: &mut [u8])
-                      -> Result<usize, io::Error> {
-    match stream.read(&mut buf) {
+fn handle_read_ready<S, T>(source: &mut S, target: &mut T, mut buf: &mut [u8])
+                           -> Result<usize, io::Error> where S: Read, T: Write {
+    match source.read(&mut buf) {
         Ok(bytes_read) => {
-            println!("Read {} bytes from stream", bytes_read);
             let mut bytes_written = 0;
             while bytes_written < bytes_read {
-                match channel.write(&buf[bytes_written..bytes_read]) {
+                match target.write(&buf[bytes_written..bytes_read]) {
                     Ok(bytes) => {
                         bytes_written += bytes;
                     },
                     Err(e) => {
-                        println!("Error when writing to channel: {}", e);
                         return Err(e);
                     }
                 }
@@ -46,31 +42,6 @@ fn handle_stream_read(session: &Session, stream: &mut TcpStream,
             Ok(bytes_written)
         },
         Err(e) => {
-            println!("Error reading from stream: {}", e);
-            Err(e)
-        }
-    }
-}
-
-fn handle_channel_read(session: &Session, stream: &mut TcpStream,
-                       channel: &mut Channel, mut buf: &mut [u8])
-                       -> Result<usize, io::Error> {
-    println!("Read from channel");
-    match channel.read(&mut buf) {
-        Ok(bytes_read) => {
-            println!("Read {} bytes from channel", bytes_read);
-            match stream.write_all(&buf[0..bytes_read]) {
-                Ok(_) => {
-                    Ok(bytes_read)
-                },
-                Err(e) => {
-                    println!("Error writing to stream: {}", e);
-                    return Err(e)
-                }
-            }
-        },
-        Err(e) => {
-            println!("Error when reading from channel: {}", e);
             Err(e)
         }
     }
@@ -113,19 +84,17 @@ fn main() {
         let mut tv = TimeVal::milliseconds(100);
         match select(cmp::max(stream_fd, channel_fd) + 1,
                      Some(&mut fd_set), None, None, &mut tv) {
-            Ok(0) => { }
+            Ok(0) => { },
             Ok(_) => {
                 if fd_set.contains(stream_fd) {
-                    match handle_stream_read(&sess, &mut stream,
-                                             &mut channel, &mut buf) {
+                    match handle_read_ready(&mut stream, &mut channel, &mut buf) {
                         Ok(0) => break,
                         Ok(bytes) => println!("Wrote {} bytes to channel", bytes),
                         Err(_) => break
                     }
                 }
                 if fd_set.contains(channel_fd) {
-                    match handle_channel_read(&sess, &mut stream,
-                                              &mut channel, &mut buf) {
+                    match handle_read_ready(&mut channel, &mut stream, &mut buf) {
                         Ok(0) => break,
                         Ok(bytes) => println!("Wrote {} bytes to stream", bytes),
                         Err(_) => break
@@ -135,4 +104,8 @@ fn main() {
             Err(_) => break
         }
     }
+
+    // Need to do this, or Session will cause a panic when dropped
+    // due to libssh2_session_free returning -37 (EAGAIN)
+    sess.set_blocking(true);
 }
