@@ -1,0 +1,8 @@
+[package]
+name = "chunnel"
+version = "0.1.0"
+authors = ["david <david.smitmanis@gmail.com>"]
+
+[dependencies]
+ssh2 = "0.2"
+nix = "0.4"
