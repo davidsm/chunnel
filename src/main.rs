@@ -11,6 +11,8 @@ use nix::sys::select::{select, FdSet};
 use nix::sys::time::TimeVal;
 use std::os::unix::io::AsRawFd;
 
+mod session;
+use session::{SSHSession, AuthDetails, AuthMethod};
 
 fn eagain_error(sess: &Session) -> bool {
     match Error::last_error(sess) {
@@ -49,22 +51,34 @@ fn handle_read_ready<S, T>(source: &mut S, target: &mut T, mut buf: &mut [u8])
 
 fn main() {
     // Connect to the local SSH server
-    let tcp = TcpStream::connect("192.168.1.17:22").expect("Could not connect to server");
-    let srcport = tcp.local_addr().unwrap().port();
-    let mut sess = Session::new().expect("Could not open session");
-    println!("Handshaking");
-    sess.handshake(&tcp).expect("Could not complete handshake");
+    // let tcp = TcpStream::connect("192.168.1.17:22").expect("Could not connect to server");
+    // let srcport = tcp.local_addr().unwrap().port();
+    // let mut sess = Session::new().expect("Could not open session");
+    // println!("Handshaking");
+    // sess.handshake(&tcp).expect("Could not complete handshake");
 
-    println!("Authenticating");
-    sess.userauth_pubkey_file("pi", None, Path::new("/home/david/.ssh/id_rsa"), None).unwrap();
+    // println!("Authenticating");
+    // sess.userauth_pubkey_file("pi", None, Path::new("/home/david/.ssh/id_rsa"), None).unwrap();
 
-    // Make sure we succeeded
-    assert!(sess.authenticated());
-    println!("Opening TCP connection from remote host");
-    let mut channel = sess.channel_direct_tcpip("127.0.0.1", 22, Some(("127.0.0.1", srcport)))
-        .expect("Could not make direct TCP/IP connection");
+    // // Make sure we succeeded
+    // assert!(sess.authenticated());
+    // println!("Opening TCP connection from remote host");
+    // let mut channel = sess.channel_direct_tcpip("127.0.0.1", 22, Some(("127.0.0.1", srcport)))
+    //     .expect("Could not make direct TCP/IP connection");
 
-    sess.set_blocking(false);
+    // sess.set_blocking(false);
+
+    let auth_details = AuthDetails::new("pi".to_string(),
+                                        AuthMethod::KeyFile(&Path::new("/home/david/.ssh/id_rsa")));
+
+    let session = SSHSession::connect("192.168.1.17", 22,
+                                      auth_details, None)
+        .expect("Could not connect/authenticate");
+
+    let mut channel = session.connect_to("127.0.0.1", 22)
+        .expect("Could not make tunneled connection");
+
+    session.set_blocking(false);
 
     let listener = TcpListener::bind("127.0.0.1:2020").unwrap();
     println!("Listening on port 2020");
@@ -75,7 +89,7 @@ fn main() {
 
     let mut fd_set = FdSet::new();
     let stream_fd = stream.as_raw_fd();
-    let channel_fd = tcp.as_raw_fd();
+    let channel_fd = session.socket().as_raw_fd();
 
     loop {
         fd_set.clear();
@@ -107,5 +121,5 @@ fn main() {
 
     // Need to do this, or Session will cause a panic when dropped
     // due to libssh2_session_free returning -37 (EAGAIN)
-    sess.set_blocking(true);
+    session.set_blocking(true);
 }
