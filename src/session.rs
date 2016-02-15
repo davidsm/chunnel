@@ -1,20 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::net::TcpStream;
 use ssh2;
-use std::result;
 
-#[derive(Debug)]
-pub enum SSHError {
-    Whatever
-}
-
-impl From<ssh2::Error> for SSHError {
-    fn from(err: ssh2::Error) -> SSHError {
-        SSHError::Whatever
-    }
-}
-
-pub type Result<T> = result::Result<T, SSHError>;
+use error::{SSHError, Result};
+use tunnel::Tunnel;
 
 pub struct AuthDetails<'p> {
     user: String,
@@ -81,7 +70,13 @@ impl<'s> SSHSession<'s> {
         })
     }
 
-    pub fn connect_to(&'s self, host: &str, port: u16) -> Result<ssh2::Channel<'s>> {
+    pub fn tunnel_to(&'s self, host: &str, port: u16, listen_port: u16) -> Result<Tunnel> {
+        let channel = try!(self.connect_to(host, port));
+        let tunnel = try!(Tunnel::establish(listen_port, self, channel));
+        Ok(tunnel)
+    }
+
+    fn connect_to(&'s self, host: &str, port: u16) -> Result<ssh2::Channel<'s>> {
         self.session.channel_direct_tcpip(host, port, None)
             .map_err(|e| SSHError::from(e))
     }
@@ -99,7 +94,6 @@ impl<'s> SSHSession<'s> {
 fn authenticate_with_key(session: &mut ssh2::Session, user: &str,
                          key_path: &Path) -> Result<AuthData> {
     // Reminder: does not support passphrase for key
-    println!("Authenticating");
     try!(session.userauth_pubkey_file(user, None, key_path, None));
     Ok(AuthData::KeyFile(key_path.to_owned()))
 }

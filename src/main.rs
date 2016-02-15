@@ -14,6 +14,9 @@ use std::os::unix::io::AsRawFd;
 mod session;
 use session::{SSHSession, AuthDetails, AuthMethod};
 
+mod tunnel;
+mod error;
+
 fn eagain_error(sess: &Session) -> bool {
     match Error::last_error(sess) {
         Some(err) => {
@@ -50,24 +53,6 @@ fn handle_read_ready<S, T>(source: &mut S, target: &mut T, mut buf: &mut [u8])
 }
 
 fn main() {
-    // Connect to the local SSH server
-    // let tcp = TcpStream::connect("192.168.1.17:22").expect("Could not connect to server");
-    // let srcport = tcp.local_addr().unwrap().port();
-    // let mut sess = Session::new().expect("Could not open session");
-    // println!("Handshaking");
-    // sess.handshake(&tcp).expect("Could not complete handshake");
-
-    // println!("Authenticating");
-    // sess.userauth_pubkey_file("pi", None, Path::new("/home/david/.ssh/id_rsa"), None).unwrap();
-
-    // // Make sure we succeeded
-    // assert!(sess.authenticated());
-    // println!("Opening TCP connection from remote host");
-    // let mut channel = sess.channel_direct_tcpip("127.0.0.1", 22, Some(("127.0.0.1", srcport)))
-    //     .expect("Could not make direct TCP/IP connection");
-
-    // sess.set_blocking(false);
-
     let auth_details = AuthDetails::new("pi".to_string(),
                                         AuthMethod::KeyFile(&Path::new("/home/david/.ssh/id_rsa")));
 
@@ -75,14 +60,13 @@ fn main() {
                                       auth_details, None)
         .expect("Could not connect/authenticate");
 
-    let mut channel = session.connect_to("127.0.0.1", 22)
+    let mut tunnel = session.tunnel_to("127.0.0.1", 22, 2020)
         .expect("Could not make tunneled connection");
+    println!("Listening on port 2020");
 
     session.set_blocking(false);
 
-    let listener = TcpListener::bind("127.0.0.1:2020").unwrap();
-    println!("Listening on port 2020");
-    let (mut stream, _) = listener.accept().unwrap();
+    let mut stream = tunnel.accept().unwrap();
     println!("Got a connection");
 
     let mut buf = [0u8; 16384];
@@ -101,14 +85,14 @@ fn main() {
             Ok(0) => { },
             Ok(_) => {
                 if fd_set.contains(stream_fd) {
-                    match handle_read_ready(&mut stream, &mut channel, &mut buf) {
+                    match handle_read_ready(&mut stream, &mut tunnel, &mut buf) {
                         Ok(0) => break,
                         Ok(bytes) => println!("Wrote {} bytes to channel", bytes),
                         Err(_) => break
                     }
                 }
                 if fd_set.contains(channel_fd) {
-                    match handle_read_ready(&mut channel, &mut stream, &mut buf) {
+                    match handle_read_ready(&mut tunnel, &mut stream, &mut buf) {
                         Ok(0) => break,
                         Ok(bytes) => println!("Wrote {} bytes to stream", bytes),
                         Err(_) => break
